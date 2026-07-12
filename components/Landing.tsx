@@ -263,7 +263,7 @@ export default function Landing() {
       <header
         ref={headerRef}
         className="absolute top-0 inset-x-0 z-50 flex flex-row justify-between items-start pt-8 md:pt-12 px-6 md:px-10 text-[14px] md:text-[17px] font-medium tracking-wide text-white uppercase select-none opacity-0"
-        style={{ fontFamily: "var(--font-outfit), sans-serif" }}
+        style={{ fontFamily: "var(--font-absans), sans-serif" }}
       >
         {/* Left Column: Email & Year */}
         <div className="flex flex-col gap-[2px] text-left leading-normal font-normal">
