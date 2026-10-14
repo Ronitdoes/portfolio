@@ -13,6 +13,17 @@ const FRAME_BASE = "/ezgif-47d5d9e8e7ec8ee7-jpg/ezgif-frame-";
 const frameUrl = (i: number) =>
   `${FRAME_BASE}${String(i).padStart(3, "0")}.jpg`;
 
+// Tagline revealed inside the box (Absans from public/fonts, loaded as --font-absans)
+const TAGLINE = "i like to build stuff.";
+let _tagIdx = 0;
+const TAGLINE_WORDS = TAGLINE.split(" ").map((w) =>
+  w.split("").map((ch) => ({ ch, li: _tagIdx++ }))
+);
+const TAGLINE_COUNT = _tagIdx;
+const TAGLINE_START = 0.7; // box scale at which letters start appearing
+const TAGLINE_END = 0.97; // box scale at which all letters are fully in
+const TAGLINE_LETTER_DUR = 0.07;
+
 // Register plugins
 gsap.registerPlugin(useGSAP, Observer);
 
@@ -31,6 +42,13 @@ export default function Landing() {
   const centerRevealRef = useRef<HTMLDivElement>(null);
   const boxImgRef = useRef<HTMLImageElement>(null);
   const frameIdxRef = useRef(0);
+  const boxTextLettersRef = useRef<(HTMLSpanElement | null)[]>([]);
+  // About page (slides up after the box goes fullscreen, scroll range 1 -> 2)
+  const aboutSectionRef = useRef<HTMLElement>(null);
+  const aboutLineRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const aboutPhotoRef = useRef<HTMLImageElement>(null);
+  const aboutPhotoWrapRef = useRef<HTMLDivElement>(null);
+  const aboutFadeRefs = useRef<(HTMLElement | null)[]>([]);
   const boxAnchorRef = useRef({ x: 0 });
   const crosshairsRef = useRef<HTMLSpanElement>(null);
 
@@ -199,11 +217,12 @@ export default function Landing() {
     const applyBoxScale = (p: number) => {
       const t = gsap.utils.clamp(0, 1, (p - 0.55) / 0.45);
       const homeX = boxAnchorRef.current.x;
+      // NOTE: yPercent is owned by applyAbout (scroll-through handoff), so it
+      // is intentionally left untouched here.
       gsap.set(centerRevealRef.current, {
         scale: t,
         x: homeX * (1 - t),
         xPercent: -50,
-        yPercent: -50,
       });
       // Scrub frames from the very beginning: t 0 -> 1 maps to frames 001 -> 120
       // (scrubs both scroll directions).
@@ -212,6 +231,34 @@ export default function Landing() {
         frameIdxRef.current = idx;
         const el = boxImgRef.current;
         if (el) el.src = frameUrl(idx + 1);
+      }
+      // Tagline: letter-by-letter blur-in across box scale 0.7 -> 0.97
+      // (scrubs both directions with the box).
+      const stag =
+        TAGLINE_COUNT > 1
+          ? (TAGLINE_END - TAGLINE_START - TAGLINE_LETTER_DUR) /
+            (TAGLINE_COUNT - 1)
+          : 0;
+      // Exit leg (scroll range 1 -> 2, from the lagged proxy): frames + tagline
+      // blur out as the box scrolls away, like the reference transition.
+      const apBox = gsap.utils.clamp(0, 1, p - 1);
+      const exitBlur = apBox * 14;
+      const tagFade = gsap.utils.clamp(0, 1, 1 - apBox * 1.6);
+      const boxImg = boxImgRef.current;
+      if (boxImg) gsap.set(boxImg, { filter: `blur(${exitBlur}px)` });
+      for (let i = 0; i < TAGLINE_COUNT; i++) {
+        const el = boxTextLettersRef.current[i];
+        if (!el) continue;
+        const li = gsap.utils.clamp(
+          0,
+          1,
+          (t - (TAGLINE_START + i * stag)) / TAGLINE_LETTER_DUR
+        );
+        gsap.set(el, {
+          autoAlpha: li * tagFade,
+          y: (1 - li) * 16,
+          filter: `blur(${(1 - li) * 12 + exitBlur}px)`,
+        });
       }
       let o = 0;
       if (t <= 0.05) o = 0;
@@ -222,8 +269,77 @@ export default function Landing() {
       gsap.set(crosshairsRef.current, { autoAlpha: o });
     };
 
+    // Scroll range 0 -> 1 is the hero (name + box); 1 -> 2 slides the About
+    // page up over the fullscreen box. Everything scrubs reversibly.
+    const ABOUT_MAX = 2;
+
+    const applyAbout = (p: number) => {
+      const ap = gsap.utils.clamp(0, 1, p - 1);
+      const sec = aboutSectionRef.current;
+      if (sec) {
+        gsap.set(sec, {
+          yPercent: (1 - ap) * 100,
+          autoAlpha: ap <= 0 ? 0 : 1,
+        });
+        sec.style.pointerEvents = ap > 0.6 ? "auto" : "none";
+      }
+      // Scroll-through handoff: the fullscreen box slides up and out at the
+      // same rate the About page slides in (both linear in ap), so frames
+      // visibly scroll away instead of being covered.
+      if (centerRevealRef.current) {
+        gsap.set(centerRevealRef.current, { yPercent: -50 - ap * 100 });
+      }
+      // Seam smudge: ramps in right as fullscreen settles into the exit
+      // (p 0.97 -> 1.04) and stays fully melted after that.
+      // (Mask-only: no tint overlay, so the image keeps full color.)
+      const meltT = gsap.utils.clamp(0, 1, (p - 0.97) / 0.07);
+      const im = boxImgRef.current;
+      if (im) {
+        const meltS = 130 - 90 * meltT;
+        const meltE = 150 - 54 * meltT;
+        const melt = `linear-gradient(to bottom, black ${meltS}%, transparent ${meltE}%)`;
+        im.style.maskImage = melt;
+        (im.style as unknown as Record<string, string>).webkitMaskImage = melt;
+      }
+      // Headline lines stagger in over ap 0.15 -> 0.85
+      const n = aboutLineRefs.current.length;
+      for (let i = 0; i < n; i++) {
+        const el = aboutLineRefs.current[i];
+        if (!el) continue;
+        const li = gsap.utils.clamp(0, 1, (ap - (0.15 + i * 0.1)) / 0.3);
+        gsap.set(el, {
+          autoAlpha: li,
+          y: (1 - li) * 44,
+          filter: `blur(${(1 - li) * 8}px)`,
+        });
+      }
+      // Portrait settles (de-zoom + de-blur + counter-scroll parallax) over ap 0.05 -> 0.9:
+      // the image drifts DOWN (yPercent -10 -> 0) while the page slides UP.
+      const pt = gsap.utils.clamp(0, 1, (ap - 0.1) / 0.8);
+      if (aboutPhotoRef.current) {
+        gsap.set(aboutPhotoRef.current, {
+          scale: 1.35 - 0.35 * pt,
+          yPercent: -22 * (1 - pt),
+          filter: `blur(${(1 - pt) * 8}px)`,
+        });
+      }
+      if (aboutPhotoWrapRef.current) {
+        gsap.set(aboutPhotoWrapRef.current, { yPercent: (1 - pt) * 6 });
+      }
+      // Bio + INFO link fade in over ap 0.5 -> 0.85 (with de-blur)
+      const fi = gsap.utils.clamp(0, 1, (ap - 0.5) / 0.35);
+      aboutFadeRefs.current.forEach((el) => {
+        if (!el) return;
+        gsap.set(el, {
+          autoAlpha: fi,
+          y: (1 - fi) * 20,
+          filter: `blur(${(1 - fi) * 6}px)`,
+        });
+      });
+    };
+
     const smoothScrollTo = (target: number, duration?: number) => {
-      targetProgress = Math.max(0, Math.min(1, target));
+      targetProgress = Math.max(0, Math.min(ABOUT_MAX, target));
 
       const distance = Math.abs(targetProgress - scrollProxy.progress);
       const computedDuration = duration ?? gsap.utils.clamp(0.45, 0.95, 0.45 + distance * 1.1);
@@ -242,7 +358,8 @@ export default function Landing() {
         overwrite: "auto",
         onUpdate: () => {
           currentProgress = scrollProxy.progress;
-          scrollTl.progress(currentProgress);
+          scrollTl.progress(Math.min(currentProgress, 1));
+          applyAbout(currentProgress);
         },
       });
 
@@ -267,6 +384,7 @@ export default function Landing() {
       scrollProxy.progress = currentProgress;
       boxProxy.progress = currentProgress;
       applyBoxScale(currentProgress);
+      applyAbout(currentProgress);
 
       observerInstance = Observer.create({
         target: window,
@@ -274,11 +392,11 @@ export default function Landing() {
         tolerance: 0,
         preventDefault: false,
         onChangeY: (self) => {
-          // Deeper scroll travel once the box takes over (progress > 0.5):
-          // Phase 1 keeps the quick 1600px track, the box zone uses 3400px
-          // so fullscreen + frame scrub take ~2x the wheel to complete.
-          const inBoxZone = targetProgress > 0.5;
-          const scrollDistance = inBoxZone ? 3400 : 1600;
+          // Scroll depth per zone: Phase 1 keeps the quick 1600px track, the
+          // box zone uses 3400px for a long frame scrub, and the About page
+          // slides up on a 2200px track.
+          const scrollDistance =
+            targetProgress > 1 ? 2200 : targetProgress > 0.5 ? 3400 : 1600;
           const delta = self.deltaY / scrollDistance;
           smoothScrollTo(targetProgress + delta);
         },
@@ -287,8 +405,9 @@ export default function Landing() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!observerInstance) return;
-      // Finer steps in the box zone for matching depth.
-      const step = targetProgress > 0.5 ? 0.05 : 0.1;
+      // Finer steps in the deeper zones for matching depth.
+      const step =
+        targetProgress > 1 ? 0.07 : targetProgress > 0.5 ? 0.05 : 0.1;
       if (e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
         smoothScrollTo(targetProgress + step);
       } else if (e.key === "ArrowUp" || e.key === "PageUp") {
@@ -305,6 +424,7 @@ export default function Landing() {
         scrollProxy.progress = currentProgress;
         boxProxy.progress = currentProgress;
         applyBoxScale(currentProgress);
+        applyAbout(currentProgress);
       }
     };
     window.addEventListener("resize", handleResize);
@@ -346,6 +466,10 @@ export default function Landing() {
         autoAlpha: 1,
         transformOrigin: "50% 50%",
       });
+      gsap.set(aboutSectionRef.current, {
+        yPercent: 100,
+        autoAlpha: 0,
+      });
       gsap.set(crosshairsRef.current, {
         autoAlpha: 0,
       });
@@ -363,6 +487,7 @@ export default function Landing() {
       buildScrollTimeline(0);
       boxProxy.progress = 0;
       applyBoxScale(0);
+      applyAbout(0);
 
       enableScrollInteraction();
       return () => {
@@ -404,6 +529,11 @@ export default function Landing() {
       yPercent: -50,
       autoAlpha: 1,
       transformOrigin: "50% 50%",
+    });
+    // About page starts parked below the viewport, invisible
+    gsap.set(aboutSectionRef.current, {
+      yPercent: 100,
+      autoAlpha: 0,
     });
     gsap.set(crosshairsRef.current, {
       autoAlpha: 0,
@@ -641,10 +771,33 @@ export default function Landing() {
           ref={boxImgRef}
           src="/ezgif-47d5d9e8e7ec8ee7-jpg/ezgif-frame-001.jpg"
           alt="Sculpture Reveal"
-          className="w-full h-full object-cover select-none pointer-events-none block"
+          className="w-full h-full object-cover select-none pointer-events-none block scale-[1.06]"
           loading="eager"
           draggable={false}
         />
+
+        {/* Tagline inside the box — letter-by-letter blur-in driven by box scale.
+            Absans (public/fonts, --font-absans). Letters start hidden (opacity-0)
+            so there is no flash before the scrub takes over. */}
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none select-none px-6">
+          <p className="font-absans text-white text-center leading-[1.05] tracking-tight text-[clamp(2.2rem,7vw,6.5rem)] [text-shadow:0_2px_40px_rgba(0,0,0,0.65)] flex flex-wrap justify-center gap-x-[0.32em]">
+            {TAGLINE_WORDS.map((word, wi) => (
+              <span key={wi} className="inline-flex whitespace-nowrap">
+                {word.map(({ ch, li }) => (
+                  <span
+                    key={li}
+                    ref={(el) => {
+                      boxTextLettersRef.current[li] = el;
+                    }}
+                    className={`inline-block opacity-0 ${ch === "." ? "text-[#FF2C2C]" : ""}`}
+                  >
+                    {ch}
+                  </span>
+                ))}
+              </span>
+            ))}
+          </p>
+        </div>
 
         {/* Viewfinder corner crosshairs (+) matching Luke Baffait */}
         <span
@@ -665,6 +818,108 @@ export default function Landing() {
           </span>
         </span>
       </div>
+
+      {/* About page — slides up over the fullscreen box (scroll range 1 -> 2).
+          Portrait: save your photo as public/me.jpg */}
+      <section
+        ref={aboutSectionRef}
+        aria-label="About"
+        className="absolute inset-0 z-[60] bg-[#0a0a0a] opacity-0 invisible overflow-hidden"
+        style={{ pointerEvents: "none" }}
+      >
+        {/* Faint red glow melting up from the bottom-right, like the reference */}
+        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_85%_100%,rgba(255,44,44,0.14),transparent_60%)]" />
+        <div className="relative h-full w-full flex flex-col md:flex-row">
+          {/* Left: statement + bio — positions mirror the reference:
+              headline top-left, bio mid at 22% indent, INFO beneath it */}
+          <div className="relative flex-1 flex flex-col px-6 md:px-0 pt-8 md:pt-[4vh] pb-4 md:pb-6 min-h-0">
+            <h2 className="font-absans text-white tracking-tight leading-[1.18] text-[clamp(1.6rem,4vw,3.4rem)] md:pl-[4vw]">
+              <span
+                ref={(el) => {
+                  aboutLineRefs.current[0] = el;
+                }}
+                className="block opacity-0"
+              >
+                As a{" "}
+                <em className="font-serif italic font-normal">
+                  creative developer
+                </em>
+                , I craft
+              </span>
+              <span
+                ref={(el) => {
+                  aboutLineRefs.current[1] = el;
+                }}
+                className="block opacity-0"
+              >
+                tailor-made web experiences,
+              </span>
+              <span
+                ref={(el) => {
+                  aboutLineRefs.current[2] = el;
+                }}
+                className="block opacity-0"
+              >
+                blending technical precision and
+              </span>
+              <span
+                ref={(el) => {
+                  aboutLineRefs.current[3] = el;
+                }}
+                className="block opacity-0"
+              >
+                <em className="font-serif italic font-normal">emotion</em>
+                <span className="text-[#FF2C2C]">.</span>
+              </span>
+            </h2>
+            <div className="flex flex-col gap-3 mt-auto md:ml-[60%] md:max-w-[40ch] md:pb-[8vh]">
+              <p
+                ref={(el) => {
+                  aboutFadeRefs.current[0] = el;
+                }}
+                className="opacity-0 text-white/85 leading-[1.9] text-[clamp(1rem,1.5vw,1.35rem)]"
+                style={{ fontFamily: "var(--font-absans), sans-serif" }}
+              >
+                My name is Ronit. A passionate creator and developer, I build
+                memorable digital experiences — always seeking the symbiosis
+                between design and technology.
+              </p>
+              <div
+                ref={(el) => {
+                  aboutFadeRefs.current[1] = el;
+                }}
+                className="opacity-0 mt-3 md:mt-6 text-[14px] md:text-[17px] font-medium tracking-wide uppercase"
+                style={{ fontFamily: "var(--font-absans), sans-serif" }}
+              >
+                <RolloverLink href="/info" label="INFO" />
+              </div>
+            </div>
+          </div>
+
+          {/* Right: portrait in arch mask — bleeds top/right/bottom on desktop,
+              curve only on the left edge like the reference */}
+          <div className="relative shrink-0 h-[30vh] md:h-full md:w-[42%] px-6 md:px-0 pb-5 md:pb-0 flex justify-center md:justify-end items-stretch">
+            <div
+              ref={aboutPhotoWrapRef}
+              className="relative w-full max-w-[440px] md:max-w-none md:w-full h-full overflow-hidden rounded-t-[999px] md:rounded-t-none md:rounded-l-[999px] bg-[#141414] bg-[radial-gradient(circle_at_50%_20%,rgba(255,44,44,0.22),transparent_70%)]"
+            >
+              <span className="absolute inset-0 flex items-center justify-center font-absans text-white/20 text-7xl select-none">
+                R.
+              </span>
+              <img
+                ref={aboutPhotoRef}
+                src="/me.jpg"
+                alt="Portrait of Ronit Mahajan"
+                className="absolute inset-0 h-full w-full object-cover"
+                draggable={false}
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

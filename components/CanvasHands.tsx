@@ -39,6 +39,7 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
   const [imageLoaded, setImageLoaded] = useState(false);
   const cellsRef = useRef<Cell[]>([]);
   const ripplesRef = useRef<Ripple[]>([]);
+  const sweepRef = useRef({ active: false, dir: 1, cx: 0 });
   const imageRef = useRef<HTMLImageElement | null>(null);
   const canvasRectRef = useRef<DOMRect | null>(null);
 
@@ -224,6 +225,44 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
       const progress = progressRef.current?.value ?? 0;
       const exitProgress = exitProgressRef?.current?.value ?? 0;
 
+      // Auto intro sweep when the hands finish assembling: drive a vertical
+      // line of ripple seeds left -> right, then right -> left, reusing the
+      // exact hover ripple system (no new visuals, just automatic triggers).
+      if (progress >= 0.999 && !state.handsMet) {
+        state.handsMet = true;
+        if (exitProgress <= 0.2) {
+          sweepRef.current = { active: true, dir: 1, cx: -6 };
+        }
+      }
+
+      const sweep = sweepRef.current;
+      if (sweep.active) {
+        if (exitProgress > 0.2) {
+          sweep.active = false;
+        } else {
+          sweep.cx += sweep.dir * 2;
+          if (sweep.cx > COLS + 6) {
+            sweep.dir = -1;
+            sweep.cx = COLS + 6;
+          } else if (sweep.cx < -6 && sweep.dir === -1) {
+            sweep.active = false;
+          } else {
+            const fractions = [0.22, 0.36, 0.5, 0.64, 0.78];
+            for (const f of fractions) {
+              ripples.push({
+                cx: Math.round(sweep.cx),
+                cy: Math.round(rows * f),
+                radius: 0,
+                maxRadius: 18,
+                speed: 0.55,
+                intensity: 0.8,
+              });
+            }
+            while (ripples.length > 48) ripples.shift();
+          }
+        }
+      }
+
       // Update cells
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i];
@@ -282,11 +321,6 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
         // Decay hover highlight values over time
         cell.highlight *= 0.94;
         if (cell.highlight < 0.005) cell.highlight = 0;
-      }
-
-      // If progress reaches 1.0, transition is complete
-      if (progress >= 0.999 && !state.handsMet) {
-        state.handsMet = true;
       }
 
       if (state.handsMet) {
@@ -401,7 +435,9 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
             intensity: 0.8,
           });
 
-          if (ripplesRef.current.length > 6) {
+          // During the auto intro sweep, allow a deeper ripple queue.
+          const cap = sweepRef.current.active ? 48 : 6;
+          if (ripplesRef.current.length > cap) {
             ripplesRef.current.shift();
           }
 
@@ -461,7 +497,9 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
             intensity: 0.75,
           });
 
-          if (ripplesRef.current.length > 6) {
+          // During the auto intro sweep, allow a deeper ripple queue.
+          const touchCap = sweepRef.current.active ? 48 : 6;
+          if (ripplesRef.current.length > touchCap) {
             ripplesRef.current.shift();
           }
 
