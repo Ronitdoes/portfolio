@@ -4,6 +4,7 @@ import React, { useRef, useEffect, useState } from "react";
 
 interface CanvasHandsProps {
   progressRef: React.RefObject<{ value: number }>;
+  exitProgressRef?: React.RefObject<{ value: number }>;
 }
 
 interface Cell {
@@ -32,7 +33,7 @@ interface Ripple {
   intensity: number;
 }
 
-export default function CanvasHands({ progressRef }: CanvasHandsProps) {
+export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHandsProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -221,24 +222,33 @@ export default function CanvasHands({ progressRef }: CanvasHandsProps) {
       }
 
       const progress = progressRef.current?.value ?? 0;
+      const exitProgress = exitProgressRef?.current?.value ?? 0;
 
       // Update cells
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i];
 
-        // Calculate positions directly based on GSAP progress
+        // Calculate positions directly based on GSAP entrance progress
         const offset = 1.2 * (1.0 - progress);
         const handShift = cell.hand === "left" ? -GAP : GAP;
-        cell.x = (cell.hand === "left" ? cell.tx - offset : cell.tx + offset) + handShift * progress;
+
+        // Exit offset when user scrolls: left hand moves to left edge, right hand moves to right edge
+        const exitDistance = 0.9;
+        const exitOffset = cell.hand === "left" 
+          ? (-exitDistance * exitProgress) 
+          : (exitDistance * exitProgress);
+
+        cell.x = (cell.hand === "left" ? cell.tx - offset : cell.tx + offset) + handShift * progress + exitOffset;
 
         // Subtle vertical swoop
         const vertOffset = (1.0 - progress) * 0.05;
         cell.y = cell.ty - vertOffset;
 
-        // Apply mouse-vicinity direct highlight
+        // Apply mouse-vicinity direct highlight (fade parallax as hands move away)
+        const parallaxFade = Math.max(0, 1.0 - exitProgress * 1.5);
         const parallaxMult = cell.hand === "left" ? LEFT_PARALLAX_MULT : RIGHT_PARALLAX_MULT;
-        const cellScreenX = xOffset + cell.x * handsW + pCurrent.x * parallaxMult;
-        const cellScreenY = yOffset + cell.y * handsH - pCurrent.y * Math.abs(parallaxMult);
+        const cellScreenX = xOffset + cell.x * handsW + pCurrent.x * parallaxMult * parallaxFade;
+        const cellScreenY = yOffset + cell.y * handsH - pCurrent.y * Math.abs(parallaxMult) * parallaxFade;
 
         const dx = cellScreenX - mouse.x;
         const dy = cellScreenY - mouse.y;
@@ -285,17 +295,28 @@ export default function CanvasHands({ progressRef }: CanvasHandsProps) {
 
       // --- 2. DRAWING ---
 
+      if (exitProgress >= 1) {
+        // Hands are fully offscreen - skip drawing for maximum performance
+        animationFrameId = requestAnimationFrame(render);
+        return;
+      }
+
       // Draw ASCII characters
       ctx.font = `bold ${fontSize}px Consolas, "Courier New", monospace`;
       ctx.textBaseline = "middle";
       ctx.textAlign = "center";
 
+      const alphaFade = exitProgress > 0.8 ? Math.max(0, (1.0 - exitProgress) / 0.2) : 1;
+      ctx.globalAlpha = alphaFade;
+
+      const parallaxFade = Math.max(0, 1.0 - exitProgress * 1.5);
+
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i];
 
         const parallaxMult = cell.hand === "left" ? LEFT_PARALLAX_MULT : RIGHT_PARALLAX_MULT;
-        const cx = xOffset + cell.x * handsW + pCurrent.x * parallaxMult;
-        const cy = yOffset + cell.y * handsH - pCurrent.y * Math.abs(parallaxMult);
+        const cx = xOffset + cell.x * handsW + pCurrent.x * parallaxMult * parallaxFade;
+        const cy = yOffset + cell.y * handsH - pCurrent.y * Math.abs(parallaxMult) * parallaxFade;
 
         if (cell.highlight > 0) {
           // Highlight transitions color to vibrant portfolio red (#FF2C2C)
@@ -311,6 +332,8 @@ export default function CanvasHands({ progressRef }: CanvasHandsProps) {
 
         ctx.fillText(cell.char, cx, cy);
       }
+
+      ctx.globalAlpha = 1;
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -364,8 +387,9 @@ export default function CanvasHands({ progressRef }: CanvasHandsProps) {
       const rows = Math.floor(COLS * imgAspect);
       const row = Math.floor(((my - yOffset) / handsH) * rows);
 
-      // Spawn a ripple wave on crossing grid boundaries (throttled)
-      if (col >= 0 && col < COLS && row >= 0 && row < rows) {
+      // Spawn a ripple wave on crossing grid boundaries (throttled, only when hands are present)
+      const currentExitProgress = exitProgressRef?.current?.value ?? 0;
+      if (currentExitProgress <= 0.2 && col >= 0 && col < COLS && row >= 0 && row < rows) {
         const state = animStateRef.current;
         if (col !== state.lastMouseGridX || row !== state.lastMouseGridY) {
           ripplesRef.current.push({
@@ -424,7 +448,8 @@ export default function CanvasHands({ progressRef }: CanvasHandsProps) {
       const rows = Math.floor(COLS * imgAspect);
       const row = Math.floor(((my - yOffset) / handsH) * rows);
 
-      if (col >= 0 && col < COLS && row >= 0 && row < rows) {
+      const currentExitProgress = exitProgressRef?.current?.value ?? 0;
+      if (currentExitProgress <= 0.2 && col >= 0 && col < COLS && row >= 0 && row < rows) {
         const state = animStateRef.current;
         if (col !== state.lastMouseGridX || row !== state.lastMouseGridY) {
           ripplesRef.current.push({

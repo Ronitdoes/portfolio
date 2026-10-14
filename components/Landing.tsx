@@ -1,13 +1,20 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
+import { Observer } from "gsap/Observer";
 import RolloverLink from "./RolloverLink";
 import CanvasHands from "./CanvasHands";
 
-// Register the useGSAP plugin
-gsap.registerPlugin(useGSAP);
+// Scrubbed frame sequence inside the reveal box (120 frames, ~9.7MB total)
+const FRAME_COUNT = 120;
+const FRAME_BASE = "/ezgif-47d5d9e8e7ec8ee7-jpg/ezgif-frame-";
+const frameUrl = (i: number) =>
+  `${FRAME_BASE}${String(i).padStart(3, "0")}.jpg`;
+
+// Register plugins
+gsap.registerPlugin(useGSAP, Observer);
 
 // Track whether the landing page intro/preloader has already run in the current session
 let hasPlayedLandingIntro = false;
@@ -15,11 +22,17 @@ let hasPlayedLandingIntro = false;
 export default function Landing() {
   const containerRef = useRef<HTMLDivElement>(null);
   const handsProgressRef = useRef({ value: 0 });
+  const handsExitRef = useRef({ value: 0 });
   const bgOverlayRef = useRef<HTMLDivElement>(null);
   const titleWrapperRef = useRef<HTMLDivElement>(null);
   const wordRonitRef = useRef<HTMLSpanElement>(null);
   const wordMahajanRef = useRef<HTMLSpanElement>(null);
-  const spacerRef = useRef<HTMLSpanElement>(null);
+  const spacerRef = useRef<HTMLDivElement>(null);
+  const centerRevealRef = useRef<HTMLDivElement>(null);
+  const boxImgRef = useRef<HTMLImageElement>(null);
+  const frameIdxRef = useRef(0);
+  const boxAnchorRef = useRef({ x: 0 });
+  const crosshairsRef = useRef<HTMLSpanElement>(null);
 
   // Refs for the swipe panels
   const redWipeRef = useRef<HTMLDivElement>(null);
@@ -28,6 +41,23 @@ export default function Landing() {
   // Ref for the header
   const headerRef = useRef<HTMLElement>(null);
 
+  // Background-preload the box frame sequence (in order, so early frames
+  // needed first are cached first). Frame 001 is already eager via <img>.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      for (let i = 2; i <= FRAME_COUNT; i++) {
+        if (cancelled) break;
+        const img = new Image();
+        img.src = frameUrl(i);
+      }
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
+
   useGSAP(() => {
     // 1. Select the letters inside our scoped container
     const ronitLetters = gsap.utils.toArray<HTMLElement>(".ronit-letter");
@@ -35,23 +65,251 @@ export default function Landing() {
 
     if (ronitLetters.length === 0 || mahajanLetters.length === 0) return;
 
-    // Calculate layout values dynamically at run-time:
-    const isDesktop = window.innerWidth >= 768;
-    const targetScale = isDesktop ? 2.0 : 1.45;
-    const targetY = isDesktop ? "41vh" : "43vh";
+    // Helper to calculate responsive layout values dynamically
+    const getLayoutValues = () => {
+      const isDesktop = window.innerWidth >= 768;
+      const targetScale = isDesktop ? 2.0 : 1.45;
+      const targetY = isDesktop ? "41vh" : "43vh";
+      const sideMargin = isDesktop ? 40 : 16;
+      const w1 = wordRonitRef.current?.offsetWidth || 0;
+      const w2 = wordMahajanRef.current?.offsetWidth || 0;
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+      const targetSpacer = Math.max(16, (screenW - (w1 * targetScale) - (w2 * targetScale) - (sideMargin * 2)) / targetScale);
+      const centerScale = isDesktop ? 1.0 : 0.95;
+      const centerSpacer = isDesktop ? 22 : 14;
 
-    // Target side margins in pixels (padding from screen edges)
-    const sideMargin = isDesktop ? 40 : 16; // 40px on desktop, 16px on mobile
+      // Because transformOrigin is "center bottom", scaling up by targetScale shifts the visual center upward by (targetScale - 1) * titleH / 2.
+      // We offset centerY downward to bring the optical center of the text to the exact vertical center of the screen.
+      const titleH = titleWrapperRef.current?.offsetHeight || (isDesktop ? 116 : 76);
+      const opticalPaddingDiff = (16 - 4) / 2; // pt-4 (16px) vs pb-1 (4px)
+      const centerY = Math.round(((targetScale - 1) * titleH) / 2 - (opticalPaddingDiff * (targetScale - 1)));
 
-    // Measured widths of the two words at scale 1
-    const w1 = wordRonitRef.current?.offsetWidth || 0;
-    const w2 = wordMahajanRef.current?.offsetWidth || 0;
-    const screenW = window.innerWidth;
+      // Final visual width needed to push words fully past screen edges
+      // (spacer lives inside the scaled title, so divide by targetScale).
+      // Must ALSO cover the word-width asymmetry: the gap center sits left of
+      // screen center by O = (w2-w1)/2*scale, so the right (wider) word needs
+      // an extra (w2-w1)*scale of gap to get its inner edge past the viewport.
+      const finalVisualW = Math.ceil(Math.max(screenW, screenH * (16 / 9)));
+      const asymVisual = Math.max(0, w2 - w1) * targetScale;
+      const breathing = isDesktop ? 96 : 64;
+      const neededVisual = finalVisualW + asymVisual + breathing;
+      const expandedSpacer = Math.ceil(neededVisual / targetScale);
 
-    // Calculate target spacer width in pixels (divided by targetScale to offset container scaling)
-    const targetSpacer = Math.max(16, (screenW - (w1 * targetScale) - (w2 * targetScale) - (sideMargin * 2)) / targetScale);
+      // Asymmetry measure: "Ronit" is narrower than "Mahajan.", so the spacer
+      // gap sits left of screen center by (w1-w2)/2*scale. The NAME is never
+      // moved — instead the box anchors to the gap (see boxAnchorRef).
+      // xComp = shift that *would* center the gap; box home x = -xComp.
+      // (GSAP x is screen px, so multiply by targetScale.)
+      const xComp = ((w2 - w1) / 2) * targetScale;
 
-    // If the intro has already played, set all elements to their final states immediately and exit
+      return {
+        isDesktop,
+        targetScale,
+        targetY,
+        targetSpacer,
+        centerScale,
+        centerSpacer,
+        centerY,
+        expandedSpacer,
+        xComp,
+      };
+    };
+
+    const initialLayout = getLayoutValues();
+    const { targetScale, targetY, targetSpacer } = initialLayout;
+
+    let targetProgress = 0;
+    let currentProgress = 0;
+    const scrollProxy = { progress: 0 };
+    const boxProxy = { progress: 0 };
+    let scrollTween: gsap.core.Tween | null = null;
+    let boxTween: gsap.core.Tween | null = null;
+
+    // 2. Build the scroll timeline for frame-by-frame scrubbing
+    const scrollTl = gsap.timeline({
+      paused: true,
+      defaults: {
+        ease: "none",
+      }
+    });
+
+    const buildScrollTimeline = (prog = 0) => {
+      const layout = getLayoutValues();
+      scrollTl.clear();
+
+      // Anchor the box home position to the actual gap center (name untouched).
+      boxAnchorRef.current.x = -layout.xComp;
+
+      // --- PHASE 1 (time 0.0 -> 1.0): Bringing name from bottom to center ---
+      // Animate hands away: left moves to left edge, right moves to right edge
+      scrollTl.fromTo(handsExitRef.current,
+        { value: 0 },
+        { value: 1, duration: 1, ease: "none" },
+        0
+      );
+
+      // Animate title wrapper from bottom (targetY) up to exact vertical center (centerY).
+      // Name stays fixed horizontally (x: 0) — never shifted.
+      scrollTl.fromTo(titleWrapperRef.current,
+        { y: layout.targetY, x: 0 },
+        { y: layout.centerY, x: 0, duration: 1, ease: "none" },
+        0
+      );
+
+      // Fade out header details as the name moves to the center
+      scrollTl.fromTo(headerRef.current,
+        { autoAlpha: 1, y: 0 },
+        { autoAlpha: 0, y: -15, duration: 0.8, ease: "power2.out" },
+        0
+      );
+
+      // Spacer holds its targetSpacer throughout Phase 1
+      scrollTl.fromTo(spacerRef.current,
+        { width: layout.targetSpacer },
+        { width: layout.targetSpacer, duration: 1, ease: "none" },
+        0
+      );
+
+      // NOTE: centerReveal box + crosshairs are NOT in the scrub timeline.
+      // They are driven separately by boxProxy with extra smoothing lag
+      // (see applyBoxScale / smoothScrollTo) so the box trails the scroll
+      // slightly for a softer, delayed feel.
+
+      // --- PHASE 2 (time 1.0 -> 2.0): words split — same feel as Phase 1 ---
+      // Single constant-velocity tween with ease "none", exactly like the
+      // Phase 1 title move.
+      scrollTl.to(spacerRef.current,
+        {
+          width: layout.expandedSpacer,
+          duration: 0.9,
+          ease: "none",
+        },
+        1.0
+      );
+
+      scrollTl.progress(prog);
+    };
+
+    // Box scrub with extra smoothing lag: maps global scroll 0..1 to box
+    // scale 0..1 across the Phase-2 window (progress 0.55..1.0). The box
+    // starts centered on the NAME GAP (not screen center — the name is never
+    // moved) and drifts to screen center as it reaches fullscreen, so it
+    // expands concentrically with the split and never slides under letters.
+    const applyBoxScale = (p: number) => {
+      const t = gsap.utils.clamp(0, 1, (p - 0.55) / 0.45);
+      const homeX = boxAnchorRef.current.x;
+      gsap.set(centerRevealRef.current, {
+        scale: t,
+        x: homeX * (1 - t),
+        xPercent: -50,
+        yPercent: -50,
+      });
+      // Scrub frames from the very beginning: t 0 -> 1 maps to frames 001 -> 120
+      // (scrubs both scroll directions).
+      const idx = Math.round(t * (FRAME_COUNT - 1));
+      if (idx !== frameIdxRef.current) {
+        frameIdxRef.current = idx;
+        const el = boxImgRef.current;
+        if (el) el.src = frameUrl(idx + 1);
+      }
+      let o = 0;
+      if (t <= 0.05) o = 0;
+      else if (t < 0.3) o = 0.75 * ((t - 0.05) / 0.25);
+      else if (t < 0.7) o = 0.75;
+      else if (t < 0.95) o = 0.75 * (1 - (t - 0.7) / 0.25);
+      else o = 0;
+      gsap.set(crosshairsRef.current, { autoAlpha: o });
+    };
+
+    const smoothScrollTo = (target: number, duration?: number) => {
+      targetProgress = Math.max(0, Math.min(1, target));
+
+      const distance = Math.abs(targetProgress - scrollProxy.progress);
+      const computedDuration = duration ?? gsap.utils.clamp(0.45, 0.95, 0.45 + distance * 1.1);
+
+      if (scrollTween) {
+        scrollTween.kill();
+      }
+      if (boxTween) {
+        boxTween.kill();
+      }
+
+      scrollTween = gsap.to(scrollProxy, {
+        progress: targetProgress,
+        duration: computedDuration,
+        ease: "power2.out",
+        overwrite: "auto",
+        onUpdate: () => {
+          currentProgress = scrollProxy.progress;
+          scrollTl.progress(currentProgress);
+        },
+      });
+
+      // Box follows the same target but much slower + softer (extra lag/smoothness).
+      boxTween = gsap.to(boxProxy, {
+        progress: targetProgress,
+        duration: gsap.utils.clamp(1.8, 3.2, computedDuration + 1.6),
+        ease: "expo.out",
+        overwrite: "auto",
+        onUpdate: () => {
+          applyBoxScale(boxProxy.progress);
+        },
+      });
+    };
+
+    let observerInstance: Observer | null = null;
+
+    const enableScrollInteraction = () => {
+      if (observerInstance) return;
+
+      buildScrollTimeline(currentProgress);
+      scrollProxy.progress = currentProgress;
+      boxProxy.progress = currentProgress;
+      applyBoxScale(currentProgress);
+
+      observerInstance = Observer.create({
+        target: window,
+        type: "wheel,touch",
+        tolerance: 0,
+        preventDefault: false,
+        onChangeY: (self) => {
+          // Deeper scroll travel once the box takes over (progress > 0.5):
+          // Phase 1 keeps the quick 1600px track, the box zone uses 3400px
+          // so fullscreen + frame scrub take ~2x the wheel to complete.
+          const inBoxZone = targetProgress > 0.5;
+          const scrollDistance = inBoxZone ? 3400 : 1600;
+          const delta = self.deltaY / scrollDistance;
+          smoothScrollTo(targetProgress + delta);
+        },
+      });
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!observerInstance) return;
+      // Finer steps in the box zone for matching depth.
+      const step = targetProgress > 0.5 ? 0.05 : 0.1;
+      if (e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
+        smoothScrollTo(targetProgress + step);
+      } else if (e.key === "ArrowUp" || e.key === "PageUp") {
+        smoothScrollTo(targetProgress - step);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    const handleResize = () => {
+      if (observerInstance) {
+        const layout = getLayoutValues();
+        gsap.set(titleWrapperRef.current, { scale: layout.targetScale });
+        buildScrollTimeline(currentProgress);
+        scrollProxy.progress = currentProgress;
+        boxProxy.progress = currentProgress;
+        applyBoxScale(currentProgress);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+
+    // If the intro has already played, set all elements to their final states immediately and enable scroll
     if (hasPlayedLandingIntro) {
       gsap.set([ronitLetters, mahajanLetters], {
         yPercent: 0,
@@ -66,18 +324,30 @@ export default function Landing() {
       gsap.set(bgOverlayRef.current, {
         autoAlpha: 0,
       });
-      gsap.set(titleWrapperRef.current, {
-        y: targetY,
-        scale: targetScale,
-      });
-      gsap.set(spacerRef.current, {
-        width: targetSpacer,
-      });
       gsap.set(redWipeRef.current, {
         yPercent: 100,
       });
       gsap.set(blackWipeRef.current, {
         yPercent: 100,
+      });
+      gsap.set(titleWrapperRef.current, {
+        y: targetY,
+        x: 0,
+        scale: targetScale,
+      });
+      gsap.set(spacerRef.current, {
+        width: targetSpacer,
+      });
+      gsap.set(centerRevealRef.current, {
+        scale: 0,
+        x: -initialLayout.xComp,
+        xPercent: -50,
+        yPercent: -50,
+        autoAlpha: 1,
+        transformOrigin: "50% 50%",
+      });
+      gsap.set(crosshairsRef.current, {
+        autoAlpha: 0,
       });
       
       const fullStop = mahajanLetters[7];
@@ -88,17 +358,30 @@ export default function Landing() {
       }
 
       handsProgressRef.current.value = 1;
-      return;
+      handsExitRef.current.value = 0;
+      targetProgress = 0;
+      buildScrollTimeline(0);
+      boxProxy.progress = 0;
+      applyBoxScale(0);
+
+      enableScrollInteraction();
+      return () => {
+        observerInstance?.kill();
+        scrollTween?.kill();
+        boxTween?.kill();
+        window.removeEventListener("keydown", handleKeyDown);
+        window.removeEventListener("resize", handleResize);
+      };
     }
 
-    // 2. Define the exact custom reveal orders
+    // 3. Define the exact custom reveal orders
     // Ronit: T -> I -> N -> O -> R (Indices: 4, 3, 2, 1, 0)
     const ronitOrder = [4, 3, 2, 1, 0].map(idx => ronitLetters[idx]);
 
     // Mahajan: M -> A -> H -> A -> J -> A -> N -> . (Indices: 0, 1, 2, 3, 4, 5, 6, 7)
     const mahajanOrder = [0, 1, 2, 3, 4, 5, 6, 7].map(idx => mahajanLetters[idx]);
 
-    // 3. Set the starting states
+    // 4. Set the starting states
     gsap.set([ronitLetters, mahajanLetters], {
       yPercent: 115,
       skewY: 8,
@@ -113,10 +396,24 @@ export default function Landing() {
       opacity: 0,
     });
 
-    // 4. Build the continuous animation timeline
+    // Start center reveal parked on the name gap (scale zero point)
+    gsap.set(centerRevealRef.current, {
+      scale: 0,
+      x: -initialLayout.xComp,
+      xPercent: -50,
+      yPercent: -50,
+      autoAlpha: 1,
+      transformOrigin: "50% 50%",
+    });
+    gsap.set(crosshairsRef.current, {
+      autoAlpha: 0,
+    });
+
+    // 5. Build the continuous animation timeline
     const tl = gsap.timeline({
       onComplete: () => {
         hasPlayedLandingIntro = true;
+        enableScrollInteraction();
       }
     });
 
@@ -162,6 +459,7 @@ export default function Landing() {
 
     tl.to(titleWrapperRef.current, {
       y: targetY,
+      x: 0,
       scale: targetScale,
       duration: 0.95,
       ease: "power4.inOut",
@@ -227,6 +525,14 @@ export default function Landing() {
       duration: 0.8,
       ease: "power2.out",
     }, "<"); // "<" syncs this tween's start with the start of the previous hands progress tween
+
+    return () => {
+      observerInstance?.kill();
+      scrollTween?.kill();
+      boxTween?.kill();
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleResize);
+    };
   }, { scope: containerRef });
 
   // Word character arrays
@@ -257,7 +563,7 @@ export default function Landing() {
       />
 
       {/* Interactive ASCII Hands */}
-      <CanvasHands progressRef={handsProgressRef} />
+      <CanvasHands progressRef={handsProgressRef} exitProgressRef={handsExitRef} />
 
       {/* Header Info Bar */}
       <header
@@ -302,10 +608,10 @@ export default function Landing() {
           ))}
         </span>
 
-        {/* Dynamic Spacer */}
-        <span
+        {/* Dynamic Spacer (empty — only pushes words apart) */}
+        <div
           ref={spacerRef}
-          className="inline-block flex-none"
+          className="inline-flex items-center justify-center flex-none relative overflow-visible"
           style={{ width: "1.1em" }}
         />
 
@@ -318,6 +624,45 @@ export default function Landing() {
               </span>
             </span>
           ))}
+        </span>
+      </div>
+
+      {/* Center-starting fullscreen reveal — fixed to the exact viewport center.
+          scale 0 = a single point at screen center, scale 1 = full screen.
+          Lives OUTSIDE the scaled title wrapper so asymmetric word widths
+          ("Ronit" vs "Mahajan.") can never offset it from the center. */}
+      <div
+        ref={centerRevealRef}
+        className="fixed left-1/2 top-1/2 w-screen h-screen z-40 overflow-hidden bg-black pointer-events-none opacity-0 invisible"
+        style={{ transformOrigin: "50% 50%" }}
+      >
+        {/* The First Frame Image from public/ezgif-47d5d9e8e7ec8ee7-jpg (scrubbed on scroll) */}
+        <img
+          ref={boxImgRef}
+          src="/ezgif-47d5d9e8e7ec8ee7-jpg/ezgif-frame-001.jpg"
+          alt="Sculpture Reveal"
+          className="w-full h-full object-cover select-none pointer-events-none block"
+          loading="eager"
+          draggable={false}
+        />
+
+        {/* Viewfinder corner crosshairs (+) matching Luke Baffait */}
+        <span
+          ref={crosshairsRef}
+          className="absolute inset-0 pointer-events-none select-none opacity-0"
+        >
+          <span className="absolute top-1.5 left-2 text-[9px] font-mono text-white/70 leading-none">
+            +
+          </span>
+          <span className="absolute bottom-1.5 left-2 text-[9px] font-mono text-white/70 leading-none">
+            +
+          </span>
+          <span className="absolute top-1.5 right-2 text-[9px] font-mono text-white/70 leading-none">
+            +
+          </span>
+          <span className="absolute bottom-1.5 right-2 text-[9px] font-mono text-white/70 leading-none">
+            +
+          </span>
         </span>
       </div>
     </div>
