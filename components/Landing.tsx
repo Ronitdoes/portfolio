@@ -12,6 +12,12 @@ const FRAME_COUNT = 120;
 const FRAME_BASE = "/ezgif-47d5d9e8e7ec8ee7-jpg/ezgif-frame-";
 const frameUrl = (i: number) =>
   `${FRAME_BASE}${String(i).padStart(3, "0")}.jpg`;
+// Decode readiness per frame. Frame 001 rides the eager <img>; the rest flip
+// true as the ordered preloader decodes them. The scrubber never displays a
+// frame that isn't ready (it holds/clamps instead of flashing), which is what
+// keeps production scrub smooth instead of network-janky.
+const frameReady: boolean[] = new Array(FRAME_COUNT).fill(false);
+frameReady[0] = true;
 
 // Tagline revealed inside the box (Absans from public/fonts, loaded as --font-absans)
 const TAGLINE = "i like to build stuff.";
@@ -59,17 +65,33 @@ export default function Landing() {
   // Ref for the header
   const headerRef = useRef<HTMLElement>(null);
 
-  // Background-preload the box frame sequence (in order, so early frames
-  // needed first are cached first). Frame 001 is already eager via <img>.
+  // Background-preload the box frame sequence IN ORDER with limited
+  // concurrency, so early frames (needed first) decode first and the scrubber
+  // always has a contiguous runway. A parallel burst would saturate mobile
+  // connections and arrive out of order (smooth locally, janky on deploy).
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
-      for (let i = 2; i <= FRAME_COUNT; i++) {
-        if (cancelled) break;
-        const img = new Image();
-        img.src = frameUrl(i);
-      }
-    }, 1500);
+      let next = 2; // frame 001 is eager via <img>
+      const load = (i: number): Promise<void> =>
+        new Promise((resolve) => {
+          if (cancelled || i > FRAME_COUNT) return resolve();
+          const img = new Image();
+          img.onload = () => {
+            frameReady[i - 1] = true;
+            resolve();
+          };
+          img.onerror = () => resolve();
+          img.src = frameUrl(i);
+        });
+      const worker = async () => {
+        while (!cancelled && next <= FRAME_COUNT) {
+          const i = next++;
+          await load(i);
+        }
+      };
+      for (let w = 0; w < 6; w++) void worker();
+    }, 1200);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -225,12 +247,18 @@ export default function Landing() {
         xPercent: -50,
       });
       // Scrub frames from the very beginning: t 0 -> 1 maps to frames 001 -> 120
-      // (scrubs both scroll directions).
+      // (scrubs both scroll directions). Never display an undecoded frame:
+      // clamp back to the newest READY frame so slow networks slow the motion
+      // instead of flashing blank/partial images.
       const idx = Math.round(t * (FRAME_COUNT - 1));
       if (idx !== frameIdxRef.current) {
-        frameIdxRef.current = idx;
-        const el = boxImgRef.current;
-        if (el) el.src = frameUrl(idx + 1);
+        let show = idx;
+        while (show > frameIdxRef.current && !frameReady[show]) show--;
+        if (show !== frameIdxRef.current) {
+          frameIdxRef.current = show;
+          const el = boxImgRef.current;
+          if (el) el.src = frameUrl(show + 1);
+        }
       }
       // Tagline: letter-by-letter blur-in across box scale 0.7 -> 0.97
       // (scrubs both directions with the box).
@@ -824,11 +852,9 @@ export default function Landing() {
       <section
         ref={aboutSectionRef}
         aria-label="About"
-        className="absolute inset-0 z-[60] bg-[#0a0a0a] opacity-0 invisible overflow-hidden"
+        className="absolute inset-0 z-[60] bg-black opacity-0 invisible overflow-hidden"
         style={{ pointerEvents: "none" }}
       >
-        {/* Faint red glow melting up from the bottom-right, like the reference */}
-        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_85%_100%,rgba(255,44,44,0.14),transparent_60%)]" />
         <div className="relative h-full w-full flex flex-col md:flex-row">
           {/* Left: statement + bio — positions mirror the reference:
               headline top-left, bio mid at 22% indent, INFO beneath it */}
@@ -901,7 +927,7 @@ export default function Landing() {
           <div className="relative shrink-0 h-[30vh] md:h-full md:w-[42%] px-6 md:px-0 pb-5 md:pb-0 flex justify-center md:justify-end items-stretch">
             <div
               ref={aboutPhotoWrapRef}
-              className="relative w-full max-w-[440px] md:max-w-none md:w-full h-full overflow-hidden rounded-t-[999px] md:rounded-t-none md:rounded-l-[999px] bg-[#141414] bg-[radial-gradient(circle_at_50%_20%,rgba(255,44,44,0.22),transparent_70%)]"
+              className="relative w-full max-w-[440px] md:max-w-none md:w-full h-full overflow-hidden rounded-t-[999px] md:rounded-t-none md:rounded-l-[999px] bg-black"
             >
               <span className="absolute inset-0 flex items-center justify-center font-absans text-white/20 text-7xl select-none">
                 R.
