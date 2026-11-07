@@ -25,3 +25,265 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+html {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar {
+  display: none;
+}
+
+/* Work reel: the container only scrolls for reduced-motion visitors, and the
+   native scrollbar would break the edge-to-edge composition. */
+.work-reel-viewport {
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.work-reel-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.work-card-link {
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.work-header {
+  transform: translateZ(0);
+}
+
+.work-title-default,
+.work-title-hover {
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: inherit;
+}
+
+.work-title-hover { transform: translateY(105%); }
+
+.work-card-link:focus-visible { transform: translateY(-8px); }
+.work-card-link:focus-visible .work-title-default { transform: translateY(-105%); }
+.work-card-link:focus-visible .work-title-hover { transform: translateY(0); }
+
+@media (hover: hover) and (pointer: fine) {
+  .work-card-link:hover { transform: translateY(-8px); }
+  .work-card-link:hover .work-title-default { transform: translateY(-105%); }
+  .work-card-link:hover .work-title-hover { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .work-card:not([data-work-copy="1"]) { display: none; }
+  .work-card-link,
+  .work-title-default,
+  .work-title-hover { transition: none; }
+  .work-card-link:hover,
+  .work-card-link:focus-visible { transform: none; }
+  .work-header {
+    position: absolute;
+  }
+
+  .work-stage {
+    position: relative;
+    height: auto;
+    min-height: 100svh;
+    overflow: visible;
+  }
+
+  .work-gallery {
+    position: relative;
+    padding-top: 10rem;
+  }
+
+  .work-track {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    padding-right: 0;
+  }
+
+  .work-card { width: 100%; }
+  .work-image { height: auto; aspect-ratio: 4 / 5; }
+  .work-image img { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) and (max-width: 639px) {
+  .work-track { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* These layout rules are scoped to Home, Info and Contact. */
+.landing-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.25rem 1rem;
+  padding: max(1.25rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0 max(1rem, env(safe-area-inset-left));
+  font-size: clamp(0.75rem, 1.6vw, 1.0625rem);
+}
+
+.landing-email {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.landing-socials {
+  grid-column: 1;
+}
+
+.landing-header .rollover-link {
+  align-items: center;
+  min-height: 2rem;
+  width: fit-content;
+}
+
+.landing-page .rollover-default,
+.landing-page .rollover-hover,
+.info-page .rollover-default,
+.info-page .rollover-hover,
+.contact-page .rollover-default,
+.contact-page .rollover-hover {
+  overflow: hidden;
+}
+
+.landing-about-layout {
+  min-height: 100%;
+  flex-direction: column;
+}
+
+.landing-about-copy {
+  padding: max(2rem, env(safe-area-inset-top)) 1.5rem 2rem;
+}
+
+.landing-about-bio {
+  margin-top: 2rem;
+  max-width: 40ch;
+}
+
+.landing-about-bio .rollover-link,
+.info-page .rollover-link,
+.contact-page .rollover-link {
+  min-height: 2.75rem;
+  align-items: center;
+}
+
+.landing-about-bio .rollover-hover,
+.info-page .rollover-hover,
+.contact-page .rollover-hover,
+.landing-header .rollover-hover {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.landing-about-portrait {
+  height: clamp(18rem, 48svh, 30rem);
+  padding: 0 1.5rem max(1.5rem, env(safe-area-inset-bottom));
+}
+
+.landing-about-photo {
+  max-width: 34rem;
+  border-radius: 999px 999px 0 0;
+}
+
+.landing-about {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.landing-about::-webkit-scrollbar {
+  display: none;
+}
+
+.landing-about:focus-visible,
+.landing-page a:focus-visible,
+.info-page a:focus-visible,
+.contact-page a:focus-visible {
+  outline: 2px solid #ff2c2c;
+  outline-offset: 4px;
+}
+
+@media (min-width: 640px) {
+  .landing-header {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    column-gap: clamp(2rem, 10vw, 12rem);
+    padding: max(2rem, env(safe-area-inset-top)) 2.5rem 0;
+  }
+
+  .landing-email,
+  .landing-socials {
+    grid-column: auto;
+  }
+
+  .landing-socials {
+    position: absolute;
+    left: 51%;
+    top: max(2rem, env(safe-area-inset-top));
+    transform: none;
+    width: max-content;
+  }
+
+  .landing-nav {
+    grid-column: -2 / -1;
+    justify-self: end;
+  }
+
+  .landing-about-copy {
+    padding-inline: 2.5rem;
+  }
+
+  .landing-about-portrait {
+    padding-inline: 2.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing-header .rollover-link {
+    min-height: 1.8125rem;
+  }
+
+  .landing-socials {
+    top: max(3rem, env(safe-area-inset-top));
+  }
+
+  .landing-header {
+    grid-template-columns: 51% minmax(0, 1fr) auto;
+    column-gap: 0;
+    padding-top: max(3rem, env(safe-area-inset-top));
+  }
+
+  .landing-about-layout {
+    flex-direction: row;
+  }
+
+  .landing-about-copy {
+    padding: 4svh 3vw max(2rem, env(safe-area-inset-bottom)) 4vw;
+  }
+
+  .landing-about-bio {
+    margin-top: auto;
+    margin-left: 24%;
+    padding-top: 2rem;
+    padding-bottom: 4svh;
+  }
+
+  .landing-about-portrait {
+    width: 42%;
+    height: auto;
+    min-height: 100dvh;
+    padding: 0;
+  }
+
+  .landing-about-photo {
+    max-width: none;
+    min-height: 100%;
+    border-radius: 999px 0 0 999px;
+  }
+}
+
+@media (max-height: 500px) and (min-width: 640px) {
+  .landing-socials {
+    top: max(1rem, env(safe-area-inset-top));
+  }
+
+  .landing-header {
+    padding-top: max(1rem, env(safe-area-inset-top));
+  }
+}

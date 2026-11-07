@@ -190,7 +190,16 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
     handleResize();
     window.addEventListener("resize", handleResize);
 
-    const render = () => {
+    // Preserve the original 60Hz simulation regardless of display refresh rate.
+    // Rendering still runs on every animation frame. Cap catch-up after stalls
+    // or returning from a background tab so the intro cannot jump ahead.
+    const simulationStep = 1000 / 60;
+    let previousTime = performance.now();
+    let accumulatedTime = simulationStep;
+
+    const render = (time: number) => {
+      accumulatedTime += Math.min(100, Math.max(0, time - previousTime));
+      previousTime = time;
       ctx.clearRect(0, 0, canvasW, canvasH);
 
       const cells = cellsRef.current;
@@ -204,127 +213,129 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
       // Evaluate window conditions once per frame instead of in a thousands-iteration loop
       const hoverRadius = window.innerWidth < 768 ? 50 : 80;
       const hoverRadiusSq = hoverRadius * hoverRadius;
-
-      // --- 1. UPDATE STATE ---
-
-      // Update parallax interpolation (smooth lerp)
-      const pTarget = parallaxTargetRef.current;
-      const pCurrent = parallaxCurrentRef.current;
-      pCurrent.x += (pTarget.x - pCurrent.x) * 0.08;
-      pCurrent.y += (pTarget.y - pCurrent.y) * 0.08;
-
-      // Update ripples
-      for (let i = ripples.length - 1; i >= 0; i--) {
-        const rip = ripples[i];
-        rip.radius += rip.speed;
-        if (rip.radius > rip.maxRadius) {
-          ripples.splice(i, 1);
-        }
-      }
-
       const progress = progressRef.current?.value ?? 0;
       const exitProgress = exitProgressRef?.current?.value ?? 0;
+      const pTarget = parallaxTargetRef.current;
+      const pCurrent = parallaxCurrentRef.current;
 
-      // Auto intro sweep when the hands finish assembling: drive a vertical
-      // line of ripple seeds left -> right, then right -> left, reusing the
-      // exact hover ripple system (no new visuals, just automatic triggers).
-      if (progress >= 0.999 && !state.handsMet) {
-        state.handsMet = true;
-        if (exitProgress <= 0.2) {
-          sweepRef.current = { active: true, dir: 1, cx: -6 };
+      // --- 1. UPDATE STATE ---
+      while (accumulatedTime >= simulationStep) {
+        accumulatedTime -= simulationStep;
+
+        // Update parallax interpolation (smooth lerp)
+        pCurrent.x += (pTarget.x - pCurrent.x) * 0.08;
+        pCurrent.y += (pTarget.y - pCurrent.y) * 0.08;
+
+        // Update ripples
+        for (let i = ripples.length - 1; i >= 0; i--) {
+          const rip = ripples[i];
+          rip.radius += rip.speed;
+          if (rip.radius > rip.maxRadius) {
+            ripples.splice(i, 1);
+          }
         }
-      }
 
-      const sweep = sweepRef.current;
-      if (sweep.active) {
-        if (exitProgress > 0.2) {
-          sweep.active = false;
-        } else {
-          sweep.cx += sweep.dir * 2;
-          if (sweep.cx > COLS + 6) {
-            sweep.dir = -1;
-            sweep.cx = COLS + 6;
-          } else if (sweep.cx < -6 && sweep.dir === -1) {
+        // Auto intro sweep when the hands finish assembling: drive a vertical
+        // line of ripple seeds left -> right, then right -> left, reusing the
+        // exact hover ripple system (no new visuals, just automatic triggers).
+        if (progress >= 0.999 && !state.handsMet) {
+          state.handsMet = true;
+          if (exitProgress <= 0.2) {
+            sweepRef.current = { active: true, dir: 1, cx: -6 };
+          }
+        }
+
+        const sweep = sweepRef.current;
+        if (sweep.active) {
+          if (exitProgress > 0.2) {
             sweep.active = false;
           } else {
-            const fractions = [0.22, 0.36, 0.5, 0.64, 0.78];
-            for (const f of fractions) {
-              ripples.push({
-                cx: Math.round(sweep.cx),
-                cy: Math.round(rows * f),
-                radius: 0,
-                maxRadius: 18,
-                speed: 0.55,
-                intensity: 0.8,
-              });
+            sweep.cx += sweep.dir * 2;
+            if (sweep.cx > COLS + 6) {
+              sweep.dir = -1;
+              sweep.cx = COLS + 6;
+            } else if (sweep.cx < -6 && sweep.dir === -1) {
+              sweep.active = false;
+            } else {
+              const fractions = [0.22, 0.36, 0.5, 0.64, 0.78];
+              for (const f of fractions) {
+                ripples.push({
+                  cx: Math.round(sweep.cx),
+                  cy: Math.round(rows * f),
+                  radius: 0,
+                  maxRadius: 18,
+                  speed: 0.55,
+                  intensity: 0.8,
+                });
+              }
+              while (ripples.length > 48) ripples.shift();
             }
-            while (ripples.length > 48) ripples.shift();
           }
         }
-      }
 
-      // Update cells
-      for (let i = 0; i < cells.length; i++) {
-        const cell = cells[i];
+        // Update cells
+        for (let i = 0; i < cells.length; i++) {
+          const cell = cells[i];
 
-        // Calculate positions directly based on GSAP entrance progress
-        const offset = 1.2 * (1.0 - progress);
-        const handShift = cell.hand === "left" ? -GAP : GAP;
+          // Calculate positions directly based on GSAP entrance progress
+          const offset = 1.2 * (1.0 - progress);
+          const handShift = cell.hand === "left" ? -GAP : GAP;
 
-        // Exit offset when user scrolls: left hand moves to left edge, right hand moves to right edge
-        const exitDistance = 0.9;
-        const exitOffset = cell.hand === "left" 
-          ? (-exitDistance * exitProgress) 
-          : (exitDistance * exitProgress);
+          // Exit offset when user scrolls: left hand moves to left edge, right hand moves to right edge
+          const exitDistance = 0.9;
+          const exitOffset = cell.hand === "left" 
+            ? (-exitDistance * exitProgress) 
+            : (exitDistance * exitProgress);
 
-        cell.x = (cell.hand === "left" ? cell.tx - offset : cell.tx + offset) + handShift * progress + exitOffset;
+          cell.x = (cell.hand === "left" ? cell.tx - offset : cell.tx + offset) + handShift * progress + exitOffset;
 
-        // Subtle vertical swoop
-        const vertOffset = (1.0 - progress) * 0.05;
-        cell.y = cell.ty - vertOffset;
+          // Subtle vertical swoop
+          const vertOffset = (1.0 - progress) * 0.05;
+          cell.y = cell.ty - vertOffset;
 
-        // Apply mouse-vicinity direct highlight (fade parallax as hands move away)
-        const parallaxFade = Math.max(0, 1.0 - exitProgress * 1.5);
-        const parallaxMult = cell.hand === "left" ? LEFT_PARALLAX_MULT : RIGHT_PARALLAX_MULT;
-        const cellScreenX = xOffset + cell.x * handsW + pCurrent.x * parallaxMult * parallaxFade;
-        const cellScreenY = yOffset + cell.y * handsH - pCurrent.y * Math.abs(parallaxMult) * parallaxFade;
+          // Apply mouse-vicinity direct highlight (fade parallax as hands move away)
+          const parallaxFade = Math.max(0, 1.0 - exitProgress * 1.5);
+          const parallaxMult = cell.hand === "left" ? LEFT_PARALLAX_MULT : RIGHT_PARALLAX_MULT;
+          const cellScreenX = xOffset + cell.x * handsW + pCurrent.x * parallaxMult * parallaxFade;
+          const cellScreenY = yOffset + cell.y * handsH - pCurrent.y * Math.abs(parallaxMult) * parallaxFade;
 
-        const dx = cellScreenX - mouse.x;
-        const dy = cellScreenY - mouse.y;
-        const distSq = dx * dx + dy * dy;
+          const dx = cellScreenX - mouse.x;
+          const dy = cellScreenY - mouse.y;
+          const distSq = dx * dx + dy * dy;
 
-        if (distSq < hoverRadiusSq) {
-          const distToMouse = Math.sqrt(distSq);
-          const force = 1.0 - distToMouse / hoverRadius;
-          cell.highlight = Math.max(cell.highlight, force * 0.55);
-        }
+          if (distSq < hoverRadiusSq) {
+            const distToMouse = Math.sqrt(distSq);
+            const force = 1.0 - distToMouse / hoverRadius;
+            cell.highlight = Math.max(cell.highlight, force * 0.55);
+          }
 
-        // Apply ripple highlights
-        for (let j = 0; j < ripples.length; j++) {
-          const rip = ripples[j];
-          const gridDx = cell.col - rip.cx;
-          const gridDy = cell.row - rip.cy;
+          // Apply ripple highlights
+          for (let j = 0; j < ripples.length; j++) {
+            const rip = ripples[j];
+            const gridDx = cell.col - rip.cx;
+            const gridDy = cell.row - rip.cy;
           
-          // Quick bounding box check: skip math calculations if cell is outside max possible ripple radius
-          const maxD = rip.radius + 1.2;
-          if (Math.abs(gridDx) <= maxD && Math.abs(gridDy) <= maxD) {
-            const gridDist = Math.sqrt(gridDx * gridDx + gridDy * gridDy);
+            // Quick bounding box check: skip math calculations if cell is outside max possible ripple radius
+            const maxD = rip.radius + 1.2;
+            if (Math.abs(gridDx) <= maxD && Math.abs(gridDy) <= maxD) {
+              const gridDist = Math.sqrt(gridDx * gridDx + gridDy * gridDy);
 
-            // Wave front check
-            if (Math.abs(gridDist - rip.radius) < 1.2) {
-              const rippleForce = rip.intensity * (1.0 - rip.radius / rip.maxRadius);
-              cell.highlight = Math.max(cell.highlight, rippleForce);
+              // Wave front check
+              if (Math.abs(gridDist - rip.radius) < 1.2) {
+                const rippleForce = rip.intensity * (1.0 - rip.radius / rip.maxRadius);
+                cell.highlight = Math.max(cell.highlight, rippleForce);
+              }
             }
           }
+
+          // Decay hover highlight values over time
+          cell.highlight *= 0.94;
+          if (cell.highlight < 0.005) cell.highlight = 0;
         }
 
-        // Decay hover highlight values over time
-        cell.highlight *= 0.94;
-        if (cell.highlight < 0.005) cell.highlight = 0;
-      }
-
-      if (state.handsMet) {
-        state.baseCharAlpha = 0.8;
+        if (state.handsMet) {
+          state.baseCharAlpha = 0.8;
+        }
       }
 
       // --- 2. DRAWING ---
@@ -372,7 +383,7 @@ export default function CanvasHands({ progressRef, exitProgressRef }: CanvasHand
       animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    render(previousTime);
 
     return () => {
       cancelAnimationFrame(animationFrameId);

@@ -6,6 +6,7 @@ import { useGSAP } from "@gsap/react";
 import { Observer } from "gsap/Observer";
 import RolloverLink from "./RolloverLink";
 import CanvasHands from "./CanvasHands";
+import Lenis from "lenis";
 
 // Scrubbed frame sequence inside the reveal box (120 frames, ~9.7MB total)
 const FRAME_COUNT = 120;
@@ -65,6 +66,21 @@ export default function Landing() {
   // Ref for the header
   const headerRef = useRef<HTMLElement>(null);
 
+  useEffect(() => {
+    const wrapper = aboutSectionRef.current;
+    const content = wrapper?.firstElementChild;
+    if (!wrapper || !(content instanceof HTMLElement)) return;
+    const lenis = new Lenis({
+      wrapper,
+      content,
+      autoRaf: true,
+      lerp: 0.1,
+      // The GSAP sequence owns input until the panel finishes revealing.
+      virtualScroll: () => wrapper.dataset.scrollReady === "true",
+    });
+    return () => lenis.destroy();
+  }, []);
+
   // Background-preload the box frame sequence IN ORDER with limited
   // concurrency, so early frames (needed first) decode first and the scrubber
   // always has a contiguous runway. A parallel burst would saturate mobile
@@ -108,20 +124,24 @@ export default function Landing() {
     // Helper to calculate responsive layout values dynamically
     const getLayoutValues = () => {
       const isDesktop = window.innerWidth >= 768;
-      const targetScale = isDesktop ? 2.0 : 1.45;
-      const targetY = isDesktop ? "41vh" : "43vh";
       const sideMargin = isDesktop ? 40 : 16;
       const w1 = wordRonitRef.current?.offsetWidth || 0;
       const w2 = wordMahajanRef.current?.offsetWidth || 0;
-      const screenW = window.innerWidth;
-      const screenH = window.innerHeight;
-      const targetSpacer = Math.max(16, (screenW - (w1 * targetScale) - (w2 * targetScale) - (sideMargin * 2)) / targetScale);
+      const screenW = containerRef.current?.clientWidth || window.innerWidth;
+      const screenH = containerRef.current?.clientHeight || window.innerHeight;
+      // Fit both words before spreading them apart, including at tablet widths.
+      const targetScale = isDesktop
+        ? (screenW - sideMargin * 2 - screenW * 0.1) / Math.max(1, w1 + w2)
+        : Math.min(1.45, (screenW - sideMargin * 2 - 16) / Math.max(1, w1 + w2));
+      const targetSpacer = Math.max(16 / targetScale, (screenW - (w1 * targetScale) - (w2 * targetScale) - (sideMargin * 2)) / targetScale);
       const centerScale = isDesktop ? 1.0 : 0.95;
       const centerSpacer = isDesktop ? 22 : 14;
 
       // Because transformOrigin is "center bottom", scaling up by targetScale shifts the visual center upward by (targetScale - 1) * titleH / 2.
       // We offset centerY downward to bring the optical center of the text to the exact vertical center of the screen.
       const titleH = titleWrapperRef.current?.offsetHeight || (isDesktop ? 116 : 76);
+      const bottomShift = isDesktop ? Math.min(40, screenH * 0.035) : Math.min(12, screenH * 0.015);
+      const targetY = Math.max(0, screenH / 2 - titleH / 2 - (isDesktop ? 0 : sideMargin) + bottomShift);
       const opticalPaddingDiff = (16 - 4) / 2; // pt-4 (16px) vs pb-1 (4px)
       const centerY = Math.round(((targetScale - 1) * titleH) / 2 - (opticalPaddingDiff * (targetScale - 1)));
 
@@ -310,6 +330,7 @@ export default function Landing() {
           autoAlpha: ap <= 0 ? 0 : 1,
         });
         sec.style.pointerEvents = ap > 0.6 ? "auto" : "none";
+        sec.dataset.scrollReady = ap >= 0.999 ? "true" : "false";
       }
       // Scroll-through handoff: the fullscreen box slides up and out at the
       // same rate the About page slides in (both linear in ap), so frames
@@ -408,6 +429,7 @@ export default function Landing() {
     const enableScrollInteraction = () => {
       if (observerInstance) return;
 
+      gsap.set(titleWrapperRef.current, { scale: getLayoutValues().targetScale });
       buildScrollTimeline(currentProgress);
       scrollProxy.progress = currentProgress;
       boxProxy.progress = currentProgress;
@@ -420,12 +442,19 @@ export default function Landing() {
         tolerance: 0,
         preventDefault: false,
         onChangeY: (self) => {
+          // Touch drags travel in the opposite direction to wheel deltas.
+          const deltaY = self.event.type === "wheel" ? self.deltaY : -self.deltaY;
+          const about = aboutSectionRef.current;
+          // Once revealed, let long About content scroll naturally. Reverse
+          // the sequence only when scrolling back past the top of the section.
+          if (currentProgress >= ABOUT_MAX - 0.001 && about &&
+            (about.scrollTop > 0 || deltaY >= 0)) return;
           // Scroll depth per zone: Phase 1 keeps the quick 1600px track, the
           // box zone uses 3400px for a long frame scrub, and the About page
           // slides up on a 2200px track.
           const scrollDistance =
             targetProgress > 1 ? 2200 : targetProgress > 0.5 ? 3400 : 1600;
-          const delta = self.deltaY / scrollDistance;
+          const delta = deltaY / scrollDistance;
           smoothScrollTo(targetProgress + delta);
         },
       });
@@ -433,6 +462,15 @@ export default function Landing() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!observerInstance) return;
+      if (e.target instanceof HTMLElement &&
+        e.target.closest("a, button, input, textarea, select")) return;
+      const forward = ["ArrowDown", "PageDown", " "].includes(e.key);
+      const backward = ["ArrowUp", "PageUp"].includes(e.key);
+      if (!forward && !backward) return;
+      const about = aboutSectionRef.current;
+      if (currentProgress >= ABOUT_MAX - 0.001 && about &&
+        (about.scrollTop > 0 || forward)) return;
+      e.preventDefault();
       // Finer steps in the deeper zones for matching depth.
       const step =
         targetProgress > 1 ? 0.07 : targetProgress > 0.5 ? 0.05 : 0.1;
@@ -456,6 +494,7 @@ export default function Landing() {
       }
     };
     window.addEventListener("resize", handleResize);
+    document.fonts.addEventListener("loadingdone", handleResize);
 
     // If the intro has already played, set all elements to their final states immediately and enable scroll
     if (hasPlayedLandingIntro) {
@@ -524,6 +563,7 @@ export default function Landing() {
         boxTween?.kill();
         window.removeEventListener("keydown", handleKeyDown);
         window.removeEventListener("resize", handleResize);
+        document.fonts.removeEventListener("loadingdone", handleResize);
       };
     }
 
@@ -690,6 +730,7 @@ export default function Landing() {
       boxTween?.kill();
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleResize);
+      document.fonts.removeEventListener("loadingdone", handleResize);
     };
   }, { scope: containerRef });
 
@@ -700,7 +741,7 @@ export default function Landing() {
   return (
     <div
       ref={containerRef}
-      className="h-screen w-full relative overflow-hidden bg-[#0a0a0a] flex items-center justify-center select-none"
+      className="landing-page h-dvh w-full relative overflow-hidden bg-[#0a0a0a] flex items-center justify-center select-none"
     >
       {/* Initial preloader black background overlay */}
       <div
@@ -726,37 +767,37 @@ export default function Landing() {
       {/* Header Info Bar */}
       <header
         ref={headerRef}
-        className="absolute top-0 inset-x-0 z-50 flex flex-row justify-between items-start pt-8 md:pt-12 px-6 md:px-10 text-[14px] md:text-[17px] font-medium tracking-wide text-white uppercase select-none opacity-0"
+        className="landing-header absolute top-0 inset-x-0 z-50 font-medium tracking-wide text-white uppercase select-none opacity-0"
         style={{ fontFamily: "var(--font-absans), sans-serif" }}
       >
         {/* Left Column: Email & Year */}
-        <div className="flex flex-col gap-[2px] text-left leading-normal font-normal">
+        <div className="landing-email flex flex-col gap-[2px] text-left leading-normal font-normal">
           <RolloverLink href="mailto:ronitdoeswork@gmail.com" label="ronitdoeswork@gmail.com" isLowercase={true} />
           <span className="opacity-50 font-normal px-[2px] pt-[2px]">© 2026</span>
         </div>
 
         {/* Middle Column: Social Links */}
-        <div className="flex flex-col gap-[2px] text-left leading-normal font-normal">
+        <div className="landing-socials flex flex-col gap-[2px] text-left leading-normal font-normal">
           <RolloverLink href="https://github.com/Ronitdoes" label="GITHUB" target="_blank" rel="noopener noreferrer" />
           <RolloverLink href="https://linkedin.com/in/ronit-mahajan" label="LINKEDIN" target="_blank" rel="noopener noreferrer" />
           <RolloverLink href="https://x.com/RonitMahajan6" label="X/TWITTER" target="_blank" rel="noopener noreferrer" />
         </div>
 
         {/* Right Column: Navigation */}
-        <div className="flex flex-col gap-[2px] text-left leading-normal font-normal">
+        <nav aria-label="Main navigation" className="landing-nav flex flex-col gap-[2px] text-left leading-normal font-normal">
           <RolloverLink href="/work" label="WORK" />
           <RolloverLink href="/info" label="INFO" />
           <RolloverLink href="/contact" label="CONTACT" />
-        </div>
+        </nav>
       </header>
 
       {/* Main title text container (z-50 to stay on top of the curtains) */}
       <div
         ref={titleWrapperRef}
-        className="flex flex-row items-center font-absans tracking-tighter text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-normal text-white text-center z-50 px-0 origin-bottom whitespace-nowrap"
+        className="landing-title flex shrink-0 flex-row items-center font-absans tracking-tighter text-[clamp(1.5rem,5vw,6rem)] font-normal text-white text-center z-50 px-0 origin-bottom whitespace-nowrap"
       >
         {/* Ronit Word */}
-        <span ref={wordRonitRef} className="flex flex-row whitespace-nowrap">
+        <span ref={wordRonitRef} className="flex shrink-0 flex-row whitespace-nowrap">
           {wordRonit.map((char, index) => (
             <span key={`r-${index}`} className="inline-flex overflow-hidden pt-4 pb-1 px-[2.5px]">
               <span className="ronit-letter inline-block opacity-0">
@@ -774,7 +815,7 @@ export default function Landing() {
         />
 
         {/* Mahajan Word */}
-        <span ref={wordMahajanRef} className="flex flex-row whitespace-nowrap">
+        <span ref={wordMahajanRef} className="flex shrink-0 flex-row whitespace-nowrap">
           {wordMahajan.map((char, index) => (
             <span key={`m-${index}`} className="inline-flex overflow-hidden pt-4 pb-1 px-[2.5px]">
               <span className={`mahajan-letter inline-block opacity-0 ${char === "." ? "text-[#FF2C2C]" : ""}`}>
@@ -791,7 +832,7 @@ export default function Landing() {
           ("Ronit" vs "Mahajan.") can never offset it from the center. */}
       <div
         ref={centerRevealRef}
-        className="fixed left-1/2 top-1/2 w-screen h-screen z-40 overflow-hidden bg-black pointer-events-none opacity-0 invisible"
+        className="fixed left-1/2 top-1/2 w-full h-dvh z-40 overflow-hidden bg-black pointer-events-none opacity-0 invisible"
         style={{ transformOrigin: "50% 50%" }}
       >
         {/* The First Frame Image from public/ezgif-47d5d9e8e7ec8ee7-jpg (scrubbed on scroll) */}
@@ -852,14 +893,15 @@ export default function Landing() {
       <section
         ref={aboutSectionRef}
         aria-label="About"
-        className="absolute inset-0 z-[60] bg-black opacity-0 invisible overflow-hidden"
+        tabIndex={0}
+        className="landing-about absolute inset-0 z-[60] bg-black opacity-0 invisible overflow-x-hidden overflow-y-auto overscroll-contain"
         style={{ pointerEvents: "none" }}
       >
-        <div className="relative h-full w-full flex flex-col md:flex-row">
+        <div className="landing-about-layout relative w-full flex">
           {/* Left: statement + bio — positions mirror the reference:
               headline top-left, bio mid at 22% indent, INFO beneath it */}
-          <div className="relative flex-1 flex flex-col px-6 md:px-0 pt-8 md:pt-[4vh] pb-4 md:pb-6 min-h-0">
-            <h2 className="font-absans text-white tracking-tight leading-[1.18] text-[clamp(1.6rem,4vw,3.4rem)] md:pl-[4vw]">
+          <div className="landing-about-copy relative min-w-0 flex-1 flex flex-col">
+            <h2 className="font-absans text-white tracking-tight leading-[1.18] text-[clamp(1.5rem,3.3vw,3.4rem)]">
               <span
                 ref={(el) => {
                   aboutLineRefs.current[0] = el;
@@ -898,7 +940,7 @@ export default function Landing() {
                 <span className="text-[#FF2C2C]">.</span>
               </span>
             </h2>
-            <div className="flex flex-col gap-3 mt-auto md:ml-[60%] md:max-w-[40ch] md:pb-[8vh]">
+            <div className="landing-about-bio flex flex-col gap-3">
               <p
                 ref={(el) => {
                   aboutFadeRefs.current[0] = el;
@@ -924,10 +966,10 @@ export default function Landing() {
 
           {/* Right: portrait in arch mask — bleeds top/right/bottom on desktop,
               curve only on the left edge like the reference */}
-          <div className="relative shrink-0 h-[30vh] md:h-full md:w-[42%] px-6 md:px-0 pb-5 md:pb-0 flex justify-center md:justify-end items-stretch">
+          <div className="landing-about-portrait relative shrink-0 flex justify-center items-stretch">
             <div
               ref={aboutPhotoWrapRef}
-              className="relative w-full max-w-[440px] md:max-w-none md:w-full h-full overflow-hidden rounded-t-[999px] md:rounded-t-none md:rounded-l-[999px] bg-black"
+              className="landing-about-photo relative w-full h-full overflow-hidden bg-black"
             >
               <span className="absolute inset-0 flex items-center justify-center font-absans text-white/20 text-7xl select-none">
                 R.

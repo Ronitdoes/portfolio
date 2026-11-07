@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { Geist_Mono, Outfit } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
+import "lenis/dist/lenis.css";
 import TransitionProvider from "@/components/TransitionProvider";
+import SmoothScrollProvider from "@/components/SmoothScrollProvider";
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -35,7 +37,9 @@ export default function RootLayout({
       className={`${geistMono.variable} ${outfit.variable} ${absans.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <TransitionProvider>{children}</TransitionProvider>
+        <SmoothScrollProvider>
+          <TransitionProvider>{children}</TransitionProvider>
+        </SmoothScrollProvider>
       </body>
     </html>
   );
